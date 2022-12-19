@@ -166,7 +166,6 @@ def run(
             ema_alpha=cfg.STRONGSORT.EMA_ALPHA,
         )
         strongsort_list.append(sort_model)
-        strongsort_list[i].model.warmup()
     outputs = [None] * nr_sources
 
     colors = [[random.randint(0, 255) for _ in range(3)] for _ in names]
@@ -387,7 +386,9 @@ def parse_opt():
         help="model.pt path(s)",
     )
     parser.add_argument(
-        "--strong-sort-weights", type=str, default=WEIGHTS / "osnet_x0_25_msmt17.pt"
+        "--strong-sort-weights",
+        type=str,
+        default=WEIGHTS / "osnet_x0_25_msmt17.torchscript.pt",
     )
     parser.add_argument(
         "--config-strongsort", type=str, default="strong_sort/configs/strong_sort.yaml"

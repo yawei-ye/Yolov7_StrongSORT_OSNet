@@ -5,15 +5,11 @@ import logging
 from .sort.nn_matching import NearestNeighborDistanceMetric
 from .sort.detection import Detection
 from .sort.tracker import Tracker
-from .deep.reid_model_factory import (
-    show_downloadeable_models,
-    get_model_url,
-    get_model_name,
-)
+
 
 from torchreid.utils import FeatureExtractor
-from torchreid.utils.tools import download_url
 from .reid_multibackend import ReIDDetectMultiBackend
+import torchvision.transforms as T
 
 __all__ = ["StrongSORT"]
 
@@ -32,10 +28,7 @@ class StrongSORT(object):
         mc_lambda=0.995,
         ema_alpha=0.9,
     ):
-
-        self.model = ReIDDetectMultiBackend(
-            weights=model_weights, device=device, fp16=fp16
-        )
+        self.model = torch.jit.load(model_weights)
 
         self.max_dist = max_dist
         metric = NearestNeighborDistanceMetric("cosine", self.max_dist, nn_budget)
@@ -45,15 +38,17 @@ class StrongSORT(object):
         self.device = device
         self.fp16 = fp16
 
-    def export(self, imgsz=(1, 256, 128, 3)):
-        im = torch.zeros(
-            *imgsz,
-            dtype=torch.half if self.fp16 else torch.float,
-            device=self.device,
+        pixel_mean = [0.485, 0.456, 0.406]
+        pixel_std = [0.229, 0.224, 0.225]
+        self.size = (256, 128)
+        self.norm = T.Compose(
+            [
+                T.ToPILImage(),
+                T.Resize(self.size),
+                T.ToTensor(),
+                T.Normalize(pixel_mean, pixel_std),
+            ]
         )
-
-        ts_model = torch.jit.trace(self.model, im)
-        logging.info("Torchscript model is supported")
 
     def update(self, bbox_xywh, confidences, classes, ori_img):
         self.height, self.width = ori_img.shape[:2]
@@ -139,6 +134,12 @@ class StrongSORT(object):
         h = int(y2 - y1)
         return t, l, w, h
 
+    def _preprocess(self, im_crops):
+        im = torch.cat([self.norm(im).unsqueeze(0) for im in im_crops], dim=0).float()
+
+        im = im.float().to(device=self.device)
+        return im
+
     def _get_features(self, bbox_xywh, ori_img):
         im_crops = []
         for box in bbox_xywh:
@@ -146,6 +147,7 @@ class StrongSORT(object):
             im = ori_img[y1:y2, x1:x2]
             im_crops.append(im)
         if im_crops:
+            im_crops = self._preprocess(im_crops)
             features = self.model(im_crops)
         else:
             features = np.array([])

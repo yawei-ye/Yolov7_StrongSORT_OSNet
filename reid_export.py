@@ -181,7 +181,7 @@ if __name__ == "__main__":
         "--img-size",
         nargs="+",
         type=int,
-        default=[256, 128],
+        default=[128, 256],
         help="image (h, w)",
     )
     args = parser.parse_args()
