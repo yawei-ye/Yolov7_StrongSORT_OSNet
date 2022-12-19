@@ -1,10 +1,6 @@
 import numpy as np
 import torch
-import sys
-import cv2
-import gdown
-from os.path import exists as file_exists, join
-import torchvision.transforms as transforms
+import logging
 
 from .sort.nn_matching import NearestNeighborDistanceMetric
 from .sort.detection import Detection
@@ -46,6 +42,18 @@ class StrongSORT(object):
         self.tracker = Tracker(
             metric, max_iou_distance=max_iou_distance, max_age=max_age, n_init=n_init
         )
+        self.device = device
+        self.fp16 = fp16
+
+    def export(self, imgsz=(1, 256, 128, 3)):
+        im = torch.zeros(
+            *imgsz,
+            dtype=torch.half if self.fp16 else torch.float,
+            device=self.device,
+        )
+
+        ts_model = torch.jit.trace(self.model, im)
+        logging.info("Torchscript model is supported")
 
     def update(self, bbox_xywh, confidences, classes, ori_img):
         self.height, self.width = ori_img.shape[:2]

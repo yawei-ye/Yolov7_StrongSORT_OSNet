@@ -153,20 +153,19 @@ def run(
     # Create as many strong sort instances as there are video sources
     strongsort_list = []
     for i in range(nr_sources):
-        strongsort_list.append(
-            StrongSORT(
-                strong_sort_weights,
-                device,
-                half,
-                max_dist=cfg.STRONGSORT.MAX_DIST,
-                max_iou_distance=cfg.STRONGSORT.MAX_IOU_DISTANCE,
-                max_age=cfg.STRONGSORT.MAX_AGE,
-                n_init=cfg.STRONGSORT.N_INIT,
-                nn_budget=cfg.STRONGSORT.NN_BUDGET,
-                mc_lambda=cfg.STRONGSORT.MC_LAMBDA,
-                ema_alpha=cfg.STRONGSORT.EMA_ALPHA,
-            )
+        sort_model = StrongSORT(
+            strong_sort_weights,
+            device,
+            half,
+            max_dist=cfg.STRONGSORT.MAX_DIST,
+            max_iou_distance=cfg.STRONGSORT.MAX_IOU_DISTANCE,
+            max_age=cfg.STRONGSORT.MAX_AGE,
+            n_init=cfg.STRONGSORT.N_INIT,
+            nn_budget=cfg.STRONGSORT.NN_BUDGET,
+            mc_lambda=cfg.STRONGSORT.MC_LAMBDA,
+            ema_alpha=cfg.STRONGSORT.EMA_ALPHA,
         )
+        strongsort_list.append(sort_model)
         strongsort_list[i].model.warmup()
     outputs = [None] * nr_sources
 
