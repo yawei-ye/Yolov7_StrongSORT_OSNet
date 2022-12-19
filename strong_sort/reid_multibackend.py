@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch
 from pathlib import Path
 import numpy as np
-import torchvision.transforms as transforms
+import torchvision.transforms as T
 import cv2
 import pandas as pd
 import gdown
@@ -119,13 +119,14 @@ class ReIDDetectMultiBackend(nn.Module):
 
         pixel_mean = [0.485, 0.456, 0.406]
         pixel_std = [0.229, 0.224, 0.225]
-        self.norm = transforms.Compose(
+        self.size = (128, 256)
+        self.norm = T.Compose(
             [
-                transforms.ToTensor(),
-                transforms.Normalize(pixel_mean, pixel_std),
+                T.ToTensor(),
+                T.Resize(self.size),
+                T.Normalize(pixel_mean, pixel_std),
             ]
         )
-        self.size = (256, 128)
         self.fp16 = fp16
         self.device = device
 
@@ -204,12 +205,8 @@ class ReIDDetectMultiBackend(nn.Module):
                 self.forward(im)  # warmup
 
     def preprocess(self, im_crops):
-        def _resize(im, size):
-            return cv2.resize(im.astype(np.float32), size)
+        im = torch.cat([self.norm(im).unsqueeze(0) for im in im_crops], dim=0).float()
 
-        im = torch.cat(
-            [self.norm(_resize(im, self.size)).unsqueeze(0) for im in im_crops], dim=0
-        ).float()
         im = im.float().to(device=self.device)
         return im
 
