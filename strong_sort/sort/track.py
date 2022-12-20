@@ -1,10 +1,14 @@
 # vim: expandtab:ts=4:sw=4
-import cv2
-import numpy as np
+from enum import Enum
+from typing import List, Optional
+
+import torch
+
+from strong_sort.sort.detection import Detection
 from strong_sort.sort.kalman_filter import KalmanFilter
 
 
-class TrackState:
+class TrackState(Enum):
     """
     Enumeration type for the single target track state. Newly created tracks are
     classified as `tentative` until enough evidence has been collected. Then,
@@ -19,6 +23,7 @@ class TrackState:
     Deleted = 3
 
 
+@torch.jit.script
 class Track:
     """
     A single target track with state space `(x, y, a, h)` and associated
@@ -68,31 +73,31 @@ class Track:
 
     def __init__(
         self,
-        detection,
-        track_id,
-        class_id,
-        conf,
-        n_init,
-        max_age,
-        ema_alpha,
-        feature=None,
+        detection: torch.Tensor,
+        track_id: int,
+        class_id: torch.Tensor,
+        conf: torch.Tensor,
+        n_init: int,
+        max_age: int,
+        ema_alpha: float,
+        feature: Optional[torch.Tensor] = None,
     ):
-        self.track_id = track_id
-        self.class_id = int(class_id)
-        self.hits = 1
-        self.age = 1
-        self.time_since_update = 0
-        self.ema_alpha = ema_alpha
+        self.track_id: int = track_id
+        self.class_id: int = int(class_id)
+        self.hits: int = 1
+        self.age: int = 1
+        self.time_since_update: int = 0
+        self.ema_alpha: float = ema_alpha
 
         self.state = TrackState.Tentative
-        self.features = []
+        self.features: List[torch.Tensor] = []
         if feature is not None:
-            feature /= np.linalg.norm(feature)
+            feature /= torch.norm(feature)
             self.features.append(feature)
 
-        self.conf = conf
-        self._n_init = n_init
-        self._max_age = max_age
+        self.conf: torch.Tensor = conf
+        self._n_init: int = n_init
+        self._max_age: int = max_age
 
         self.kf = KalmanFilter()
         self.mean, self.covariance = self.kf.initiate(detection)
@@ -107,7 +112,7 @@ class Track:
             The bounding box.
 
         """
-        ret = self.mean[:4].copy()
+        ret = self.mean[:4].clone()
         ret[2] *= ret[3]
         ret[:2] -= ret[2:] / 2
         return ret
@@ -126,148 +131,13 @@ class Track:
         ret[2:] = ret[:2] + ret[2:]
         return ret
 
-    def ECC(
-        self,
-        src,
-        dst,
-        warp_mode=cv2.MOTION_EUCLIDEAN,
-        eps=1e-5,
-        max_iter=100,
-        scale=0.1,
-        align=False,
-    ):
-        """Compute the warp matrix from src to dst.
-        Parameters
-        ----------
-        src : ndarray
-            An NxM matrix of source img(BGR or Gray), it must be the same format as dst.
-        dst : ndarray
-            An NxM matrix of target img(BGR or Gray).
-        warp_mode: flags of opencv
-            translation: cv2.MOTION_TRANSLATION
-            rotated and shifted: cv2.MOTION_EUCLIDEAN
-            affine(shift,rotated,shear): cv2.MOTION_AFFINE
-            homography(3d): cv2.MOTION_HOMOGRAPHY
-        eps: float
-            the threshold of the increment in the correlation coefficient between two iterations
-        max_iter: int
-            the number of iterations.
-        scale: float or [int, int]
-            scale_ratio: float
-            scale_size: [W, H]
-        align: bool
-            whether to warp affine or perspective transforms to the source image
-        Returns
-        -------
-        warp matrix : ndarray
-            Returns the warp matrix from src to dst.
-            if motion models is homography, the warp matrix will be 3x3, otherwise 2x3
-        src_aligned: ndarray
-            aligned source image of gray
-        """
-
-        # skip if current and previous frame are not initialized (1st inference)
-        if src.any() or dst.any() is None:
-            return None, None
-        # skip if current and previous fames are not the same size
-        elif src.shape != dst.shape:
-            return None, None
-
-        # BGR2GRAY
-        if src.ndim == 3:
-            # Convert images to grayscale
-            src = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY)
-            dst = cv2.cvtColor(dst, cv2.COLOR_BGR2GRAY)
-
-        # make the imgs smaller to speed up
-        if scale is not None:
-            if isinstance(scale, float) or isinstance(scale, int):
-                if scale != 1:
-                    src_r = cv2.resize(
-                        src, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR
-                    )
-                    dst_r = cv2.resize(
-                        dst, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR
-                    )
-                    scale = [scale, scale]
-                else:
-                    src_r, dst_r = src, dst
-                    scale = None
-            else:
-                if scale[0] != src.shape[1] and scale[1] != src.shape[0]:
-                    src_r = cv2.resize(
-                        src, (scale[0], scale[1]), interpolation=cv2.INTER_LINEAR
-                    )
-                    dst_r = cv2.resize(
-                        dst, (scale[0], scale[1]), interpolation=cv2.INTER_LINEAR
-                    )
-                    scale = [scale[0] / src.shape[1], scale[1] / src.shape[0]]
-                else:
-                    src_r, dst_r = src, dst
-                    scale = None
-        else:
-            src_r, dst_r = src, dst
-
-        # Define 2x3 or 3x3 matrices and initialize the matrix to identity
-        if warp_mode == cv2.MOTION_HOMOGRAPHY:
-            warp_matrix = np.eye(3, 3, dtype=np.float32)
-        else:
-            warp_matrix = np.eye(2, 3, dtype=np.float32)
-
-        # Define termination criteria
-        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, max_iter, eps)
-
-        # Run the ECC algorithm. The results are stored in warp_matrix.
-        try:
-            (cc, warp_matrix) = cv2.findTransformECC(
-                src_r, dst_r, warp_matrix, warp_mode, criteria, None, 1
-            )
-        except cv2.error as e:
-            return None, None
-
-        if scale is not None:
-            warp_matrix[0, 2] = warp_matrix[0, 2] / scale[0]
-            warp_matrix[1, 2] = warp_matrix[1, 2] / scale[1]
-
-        if align:
-            sz = src.shape
-            if warp_mode == cv2.MOTION_HOMOGRAPHY:
-                # Use warpPerspective for Homography
-                src_aligned = cv2.warpPerspective(
-                    src, warp_matrix, (sz[1], sz[0]), flags=cv2.INTER_LINEAR
-                )
-            else:
-                # Use warpAffine for Translation, Euclidean and Affine
-                src_aligned = cv2.warpAffine(
-                    src, warp_matrix, (sz[1], sz[0]), flags=cv2.INTER_LINEAR
-                )
-            return warp_matrix, src_aligned
-        else:
-            return warp_matrix, None
-
-    def get_matrix(self, matrix):
-        eye = np.eye(3)
-        dist = np.linalg.norm(eye - matrix)
+    def get_matrix(self, matrix: torch.Tensor):
+        eye = torch.eye(3, device=matrix.device)
+        dist = torch.linalg.norm(eye - matrix)
         if dist < 100:
             return matrix
         else:
             return eye
-
-    def camera_update(self, previous_frame, next_frame):
-        warp_matrix, src_aligned = self.ECC(previous_frame, next_frame)
-        if warp_matrix is None and src_aligned is None:
-            return
-        [a, b] = warp_matrix
-        warp_matrix = np.array([a, b, [0, 0, 1]])
-        warp_matrix = warp_matrix.tolist()
-        matrix = self.get_matrix(warp_matrix)
-
-        x1, y1, x2, y2 = self.to_tlbr()
-        x1_, y1_, _ = matrix @ np.array([x1, y1, 1]).T
-        x2_, y2_, _ = matrix @ np.array([x2, y2, 1]).T
-        w, h = x2_ - x1_, y2_ - y1_
-        cx, cy = x1_ + w / 2, y1_ + h / 2
-        self.mean[:4] = [cx, cy, w / h, h]
 
     def increment_age(self):
         self.age += 1
@@ -287,7 +157,7 @@ class Track:
         self.age += 1
         self.time_since_update += 1
 
-    def update(self, detection, class_id, conf):
+    def update(self, detection: Detection, class_id: torch.Tensor, conf: torch.Tensor):
         """Perform Kalman filter measurement update step and update the feature
         cache.
         Parameters
@@ -296,17 +166,17 @@ class Track:
             The associated detection.
         """
         self.conf = conf
-        self.class_id = class_id.int()
+        self.class_id = int(class_id)
         self.mean, self.covariance = self.kf.update(
             self.mean, self.covariance, detection.to_xyah(), detection.confidence
         )
 
-        feature = detection.feature / np.linalg.norm(detection.feature)
+        feature = detection.feature / torch.linalg.norm(detection.feature)
 
         smooth_feat = (
             self.ema_alpha * self.features[-1] + (1 - self.ema_alpha) * feature
         )
-        smooth_feat /= np.linalg.norm(smooth_feat)
+        smooth_feat /= torch.linalg.norm(smooth_feat)
         self.features = [smooth_feat]
 
         self.hits += 1
