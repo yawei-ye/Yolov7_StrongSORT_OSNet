@@ -1,7 +1,8 @@
 # vim: expandtab:ts=4:sw=4
-import numpy as np
+import torch
 
 
+@torch.jit.script
 class Detection(object):
     """
     This class represents a bounding box detection in a single image.
@@ -26,16 +27,18 @@ class Detection(object):
 
     """
 
-    def __init__(self, tlwh, confidence, feature):
-        self.tlwh = np.asarray(tlwh, dtype=np.float)
-        self.confidence = float(confidence)
-        self.feature = np.asarray(feature.cpu(), dtype=np.float32)
+    def __init__(
+        self, tlwh: torch.Tensor, confidence: torch.Tensor, feature: torch.Tensor
+    ):
+        self.tlwh = tlwh
+        self.confidence = confidence
+        self.feature = feature
 
     def to_tlbr(self):
         """Convert bounding box to format `(min x, min y, max x, max y)`, i.e.,
         `(top left, bottom right)`.
         """
-        ret = self.tlwh.copy()
+        ret = self.tlwh.clone()
         ret[2:] += ret[:2]
         return ret
 
@@ -43,7 +46,7 @@ class Detection(object):
         """Convert bounding box to format `(center x, center y, aspect ratio,
         height)`, where the aspect ratio is `width / height`.
         """
-        ret = self.tlwh.copy()
+        ret = self.tlwh.clone()
         ret[:2] += ret[2:] / 2
         ret[2] /= ret[3]
         return ret
